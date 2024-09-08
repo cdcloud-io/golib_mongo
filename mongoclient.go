@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
@@ -22,14 +23,12 @@ type ClientOptions struct {
 	ServerSelectionTimeout time.Duration
 }
 
-// Query represents a MongoDB query
-type Query struct {
+// QueryParams abstracts the MongoDB query parameters
+type QueryParams struct {
+	Database   string
 	Collection string
-	Filter     interface{}
-	Result     interface{}
+	Filter     bson.M
 }
-
-// ## Public functions ##
 
 // NewClient creates and returns a new Client with the given options
 func NewClient(opts ClientOptions) (*Client, error) {
@@ -52,19 +51,15 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	return &Client{Client: mongoClient}, nil
 }
 
-// ## Public methods ##
-
 // Close disconnects the client from MongoDB
 func (c *Client) Close(ctx context.Context) error {
 	return c.Disconnect(ctx)
 }
 
-func (c *Client) QueryIBOtoStruct(ctx context.Context, )
-
-// FindOne executes a query to find a single document
-func (c *Client) QueryOne(ctx context.Context, db string, query Query) error {
-	collection := c.Database(db).Collection(query.Collection)
-	err := collection.FindOne(ctx, query.Filter).Decode(query.Result)
+// QueryOne executes a query to find a single document using QueryParams
+func (c *Client) QueryOne(ctx context.Context, params QueryParams, result interface{}) error {
+	collection := c.Database(params.Database).Collection(params.Collection)
+	err := collection.FindOne(ctx, params.Filter).Decode(result)
 	if err == mongo.ErrNoDocuments {
 		return nil
 	}
@@ -74,10 +69,10 @@ func (c *Client) QueryOne(ctx context.Context, db string, query Query) error {
 	return nil
 }
 
-// FindMany executes a query to find multiple documents
-func (c *Client) QueryMany(ctx context.Context, db string, query Query) ([]interface{}, error) {
-	collection := c.Database(db).Collection(query.Collection)
-	cursor, err := collection.Find(ctx, query.Filter)
+// QueryMany executes a query to find multiple documents using QueryParams
+func (c *Client) QueryMany(ctx context.Context, params QueryParams) ([]interface{}, error) {
+	collection := c.Database(params.Database).Collection(params.Collection)
+	cursor, err := collection.Find(ctx, params.Filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute Find query: %w", err)
 	}
@@ -90,81 +85,47 @@ func (c *Client) QueryMany(ctx context.Context, db string, query Query) ([]inter
 	return results, nil
 }
 
-// InsertOne inserts a single document into the specified collection
-func (c *Client) InsertOne(ctx context.Context, db, collection string, document interface{}) (*mongo.InsertOneResult, error) {
-	result, err := c.Database(db).Collection(collection).InsertOne(ctx, document)
+// InsertOne inserts a single document using QueryParams
+func (c *Client) InsertOne(ctx context.Context, params QueryParams, document interface{}) (*mongo.InsertOneResult, error) {
+	result, err := c.Database(params.Database).Collection(params.Collection).InsertOne(ctx, document)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert document: %w", err)
 	}
 	return result, nil
 }
 
-// UpdateOne updates a single document in the specified collection
-func (c *Client) UpdateOne(ctx context.Context, db, collection string, filter, update interface{}) (*mongo.UpdateResult, error) {
-	result, err := c.Database(db).Collection(collection).UpdateOne(ctx, filter, update)
+// UpdateOne updates a single document using QueryParams
+func (c *Client) UpdateOne(ctx context.Context, params QueryParams, update interface{}) (*mongo.UpdateResult, error) {
+	result, err := c.Database(params.Database).Collection(params.Collection).UpdateOne(ctx, params.Filter, update)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update document: %w", err)
 	}
 	return result, nil
 }
 
-// DeleteOne deletes a single document from the specified collection
-func (c *Client) DeleteOne(ctx context.Context, db, collection string, filter interface{}) (*mongo.DeleteResult, error) {
-	result, err := c.Database(db).Collection(collection).DeleteOne(ctx, filter)
+// DeleteOne deletes a single document using QueryParams
+func (c *Client) DeleteOne(ctx context.Context, params QueryParams) (*mongo.DeleteResult, error) {
+	result, err := c.Database(params.Database).Collection(params.Collection).DeleteOne(ctx, params.Filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete document: %w", err)
 	}
 	return result, nil
 }
 
+// QueryMongoDB executes a MongoDB query with abstracted parameters
+func (c *Client) QueryMongoDB(ctx context.Context, params QueryParams) (map[string]interface{}, error) {
+	collection := c.Database(params.Database).Collection(params.Collection)
 
-// ## LEGACY ##
-/*
+	// Store the result in a map[string]interface{} since the structure is unknown
+	var result map[string]interface{}
 
-package mongoclient
-
-import (
-	"context"
-	"fmt"
-
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-)
-
-// CreateClient initializes and returns a MongoDB client
-func CreateClient(uri string) (*mongo.Client, error) {
-	opts := options.Client().ApplyURI(uri)
-
-	// Create a new client and connect to the server
-	client, err := mongo.Connect(context.TODO(), opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
-	}
-
-	// Send a ping to confirm a successful connection
-	var result bson.M
-	if err := client.Database("admin").RunCommand(context.TODO(), bson.D{{Key: "ping", Value: 1}}).Decode(&result); err != nil {
-		client.Disconnect(context.TODO())
-		return nil, fmt.Errorf("failed to ping MongoDB: %w", err)
-	}
-
-	return client, nil
-}
-
-// QueryMongoDB queries the MongoDB collection for a user with the specified IBO number
-func QueryMongoDB(db *mongo.Database, collectionName string, iboNumber uint64) (*data.MongoUser, error) {
-	collection := db.Collection(collectionName)
-	filter := bson.M{"iboNumber": iboNumber}
-	var user data.MongoUser
-	err := collection.FindOne(context.TODO(), filter).Decode(&user)
+	err := collection.FindOne(ctx, params.Filter).Decode(&result)
 	if err == mongo.ErrNoDocuments {
-		return nil, nil
+		return nil, fmt.Errorf("no documents found")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query MongoDB: %w", err)
 	}
-	return &user, nil
-}
 
-*/
+	return result, nil
+}
